@@ -269,13 +269,10 @@ namespace StreamJsonRpc
         private void WriteJToken(IBufferWriter<byte> contentBuffer, JToken json)
         {
             this.bufferTextWriter.Initialize(contentBuffer, this.Encoding);
-            using (var streamWriter = new StreamWriter(contentBuffer.AsStream(), this.Encoding, 4096))
+            using (var jsonWriter = new JsonTextWriter(this.bufferTextWriter))
             {
-                using (var jsonWriter = new JsonTextWriter(streamWriter))
-                {
-                    json.WriteTo(jsonWriter);
-                    jsonWriter.Flush();
-                }
+                json.WriteTo(jsonWriter);
+                jsonWriter.Flush();
             }
         }
 
@@ -495,12 +492,8 @@ namespace StreamJsonRpc
             /// <inheritdoc />
             public override void Flush()
             {
-                if (this.memoryPosition > 0)
-                {
-                    this.bufferWriter.Advance(this.memoryPosition);
-                    this.memoryPosition = 0;
-                    this.memory = default;
-                }
+                this.CommitCharacters();
+                this.CommitBytes();
             }
 
             /// <inheritdoc />
@@ -535,7 +528,7 @@ namespace StreamJsonRpc
                     int maxBytesLength = this.Encoding.GetMaxByteCount(this.charBufferPosition);
                     if (this.memory.Length - this.memoryPosition < maxBytesLength)
                     {
-                        this.Flush();
+                        this.CommitBytes();
                         this.memory = this.bufferWriter.GetMemory(maxBytesLength);
                     }
 
@@ -558,6 +551,16 @@ namespace StreamJsonRpc
                     {
                         this.Flush();
                     }
+                }
+            }
+
+            private void CommitBytes()
+            {
+                if (this.memoryPosition > 0)
+                {
+                    this.bufferWriter.Advance(this.memoryPosition);
+                    this.memoryPosition = 0;
+                    this.memory = default;
                 }
             }
         }
