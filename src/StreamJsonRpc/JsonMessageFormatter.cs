@@ -11,6 +11,7 @@ namespace StreamJsonRpc
     using System.IO;
     using System.Linq;
     using System.Reflection;
+    using System.Runtime.InteropServices;
     using System.Runtime.Serialization;
     using System.Text;
     using System.Threading;
@@ -52,6 +53,11 @@ namespace StreamJsonRpc
         /// </summary>
         [DebuggerBrowsable(DebuggerBrowsableState.Never)]
         private Encoding encoding;
+
+        /// <summary>
+        /// The reusable <see cref="TextWriter"/> to use with newtonsoft.json's serializer.
+        /// </summary>
+        private readonly BufferTextWriter bufferTextWriter = new BufferTextWriter();
 
         /// <summary>
         /// Initializes a new instance of the <see cref="JsonMessageFormatter"/> class
@@ -262,6 +268,7 @@ namespace StreamJsonRpc
 
         private void WriteJToken(IBufferWriter<byte> contentBuffer, JToken json)
         {
+            this.bufferTextWriter.Initialize(contentBuffer, this.Encoding);
             using (var streamWriter = new StreamWriter(contentBuffer.AsStream(), this.Encoding, 4096))
             {
                 using (var jsonWriter = new JsonTextWriter(streamWriter))
@@ -465,6 +472,93 @@ namespace StreamJsonRpc
                 }
 
                 return result.ToObject<T>(this.jsonSerializer);
+            }
+        }
+
+        private class BufferTextWriter : TextWriter
+        {
+            private readonly char[] charBuffer = new char[512];
+
+            private IBufferWriter<byte> bufferWriter;
+
+            private Memory<byte> memory;
+
+            private int memoryPosition;
+
+            private int charBufferPosition;
+
+            private Encoding encoding;
+
+            /// <inheritdoc />
+            public override Encoding Encoding => this.encoding;
+
+            /// <inheritdoc />
+            public override void Flush()
+            {
+                if (this.memoryPosition > 0)
+                {
+                    this.bufferWriter.Advance(this.memoryPosition);
+                    this.memoryPosition = 0;
+                    this.memory = default;
+                }
+            }
+
+            /// <inheritdoc />
+            public override Task FlushAsync()
+            {
+                this.Flush();
+                return Task.CompletedTask;
+            }
+
+            /// <inheritdoc />
+            public override void Write(char value)
+            {
+                this.charBuffer[this.charBufferPosition++] = value;
+                if (this.charBufferPosition == this.charBuffer.Length)
+                {
+                    this.CommitCharacters();
+                }
+            }
+
+            internal void Initialize(IBufferWriter<byte> bufferWriter, Encoding encoding)
+            {
+                Assumes.True(this.memoryPosition == 0);
+                Assumes.True(this.charBufferPosition == 0);
+                this.bufferWriter = bufferWriter ?? throw new ArgumentNullException(nameof(bufferWriter));
+                this.encoding = encoding ?? throw new ArgumentNullException(nameof(encoding));
+            }
+
+            private unsafe void CommitCharacters()
+            {
+                if (this.charBufferPosition > 0)
+                {
+                    int maxBytesLength = this.Encoding.GetMaxByteCount(this.charBufferPosition);
+                    if (this.memory.Length - this.memoryPosition < maxBytesLength)
+                    {
+                        this.Flush();
+                        this.memory = this.bufferWriter.GetMemory(maxBytesLength);
+                    }
+
+                    if (MemoryMarshal.TryGetArray(this.memory, out ArraySegment<byte> segment))
+                    {
+                        this.memoryPosition += this.Encoding.GetBytes(this.charBuffer, 0, this.charBufferPosition, segment.Array, segment.Offset + this.memoryPosition);
+                    }
+                    else
+                    {
+                        fixed (char* pCharBuffer = this.charBuffer)
+                        fixed (byte* pMemory = &this.memory.Span[this.memoryPosition])
+                        {
+                            this.memoryPosition += this.Encoding.GetBytes(pCharBuffer, this.charBufferPosition, pMemory, this.memory.Length - this.memoryPosition);
+                        }
+                    }
+
+                    this.charBufferPosition = 0;
+
+                    if (this.memoryPosition == this.memory.Length)
+                    {
+                        this.Flush();
+                    }
+                }
             }
         }
     }
