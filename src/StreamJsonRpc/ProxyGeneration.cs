@@ -2,8 +2,8 @@
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 // Uncomment the SaveAssembly symbol and run one test to save the generated DLL for inspection in ILSpy as part of debugging.
-#if NETFRAMEWORK
-////#define SaveAssembly
+#if DEBUG
+#define SaveAssembly
 #endif
 
 namespace StreamJsonRpc
@@ -359,8 +359,7 @@ namespace StreamJsonRpc
                 GeneratedProxiesByInterface.Add(serviceInterface, generatedType);
 
 #if SaveAssembly
-                ((AssemblyBuilder)proxyModuleBuilder.Assembly).Save(proxyModuleBuilder.ScopeName);
-                System.IO.File.Move(proxyModuleBuilder.ScopeName, proxyModuleBuilder.ScopeName + ".dll");
+                new Lokad.ILPack.AssemblyGenerator().GenerateAssembly(proxyModuleBuilder.Assembly, @"d:\temp\myassembly.dll");
 #endif
             }
 
@@ -447,11 +446,7 @@ namespace StreamJsonRpc
         private static AssemblyBuilder CreateProxyAssemblyBuilder()
         {
             var proxyAssemblyName = new AssemblyName(string.Format(CultureInfo.InvariantCulture, "rpcProxies_{0}", Guid.NewGuid()));
-#if SaveAssembly
-            return AssemblyBuilder.DefineDynamicAssembly(proxyAssemblyName, AssemblyBuilderAccess.RunAndSave);
-#else
             return AssemblyBuilder.DefineDynamicAssembly(proxyAssemblyName, AssemblyBuilderAccess.RunAndCollect);
-#endif
         }
 
         private static ConstructorInfo CreateParameterObjectType(ModuleBuilder moduleBuilder, ParameterInfo[] parameters, Type parentType)
