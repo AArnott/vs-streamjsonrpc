@@ -636,11 +636,29 @@ public class JsonRpcProxyGenerationTests : TestBase
         Assert.True(tracker.Notification.IsCompleted);
 
         Assert.Same(tracker.JsonRpc, tracker.Notification.Result.JsonRpc);
-        Assert.Same(typeof(IServerWithValueTasks), tracker.Notification.Result.Args.ProxyType);
+        Assert.Same(typeof(IServer), tracker.Notification.Result.Args.ProxyType);
 
         // Verify that the callstack of the owner was captured:
         var testMethod = MethodBase.GetCurrentMethod();
         Assert.Contains(testMethod, tracker.Notification.Result.Args.OwnerStackTrace?.GetFrames().Select(f => f?.GetMethod()));
+    }
+
+    [Fact]
+    public void ProxyAbandonment_WhenProxyHasEventHandlersWiredUp()
+    {
+        var streams = FullDuplexStream.CreateStreams();
+        var server = new Server();
+        JsonRpc.Attach(streams.Item2, server);
+
+        var tracker = ProxyAbandonmentIsReported_Helper(streams.Item1, addEventHandler: true);
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+
+        // Even when event handlers are wired up, the proxy being abandoned means a loss of the means to Dispose,
+        // which may not have needed to happen by now but it should inevitably happen sometime, so it is never ok
+        // for the owner to lose their last reference to it.
+        Assert.False(tracker.Weak.IsAlive);
+        Assert.True(tracker.Notification.IsCompleted);
     }
 
     [Fact]
@@ -680,12 +698,18 @@ public class JsonRpcProxyGenerationTests : TestBase
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static (WeakReference Weak, JsonRpc JsonRpc, Task<(JsonRpc JsonRpc, JsonRpc.AbandonedConnectionEventArgs Args)> Notification) ProxyAbandonmentIsReported_Helper(Stream stream, bool disposeJsonRpc = false, bool disposeProxy = false)
+    private static (WeakReference Weak, JsonRpc JsonRpc, Task<(JsonRpc JsonRpc, JsonRpc.AbandonedConnectionEventArgs Args)> Notification) ProxyAbandonmentIsReported_Helper(Stream stream, bool disposeJsonRpc = false, bool disposeProxy = false, bool addEventHandler = false)
     {
         var abandonedSource = new TaskCompletionSource<(JsonRpc JsonRpc, JsonRpc.AbandonedConnectionEventArgs Args)>();
         var jsonRpc = new JsonRpc(stream);
         jsonRpc.Abandoned += (s, e) => abandonedSource.SetResult(((JsonRpc)s!, e));
-        var clientRpc = jsonRpc.Attach<IServerWithValueTasks>();
+        var clientRpc = jsonRpc.Attach<IServer>();
+
+        if (addEventHandler)
+        {
+            clientRpc.AppleGrown += (s, e) => { };
+        }
+
         jsonRpc.StartListening();
 
         // For tests that want to dispose JsonRpc, be sure to do it *before* the client proxy may be collected.
