@@ -182,6 +182,16 @@ public class JsonRpcJsonHeadersTests : JsonRpcTests
         Assert.StrictEqual(COR_E_UNAUTHORIZEDACCESS, errorData.HResult);
     }
 
+    [Fact]
+    public async Task TypeAnnotatedUserTypes()
+    {
+        ((JsonMessageFormatter)this.clientMessageFormatter).JsonSerializer.TypeNameHandling = TypeNameHandling.Objects;
+        ((JsonMessageFormatter)this.serverMessageFormatter).JsonSerializer.TypeNameHandling = TypeNameHandling.Objects;
+
+        int result = await this.clientRpc.InvokeWithParameterObjectAsync<int>(nameof(Server.OverloadedMethod), new { i = 3 }, this.TimeoutToken);
+        Assert.Equal(3, result);
+    }
+
     protected override void InitializeFormattersAndHandlers(bool controlledFlushingClient)
     {
         this.clientMessageFormatter = new JsonMessageFormatter
