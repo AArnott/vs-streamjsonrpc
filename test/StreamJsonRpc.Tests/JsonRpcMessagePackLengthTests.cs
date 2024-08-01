@@ -27,6 +27,8 @@ public class JsonRpcMessagePackLengthTests : JsonRpcTests
         IAsyncEnumerable<UnionBaseClass> GetAsyncEnumerableOfUnionType(CancellationToken cancellationToken);
 
         Task<bool> IsExtensionArgNonNull(CustomExtensionType extensionValue);
+
+        Task<string?> GetAPropertyFromStruct([MessagePackFormatter(typeof(ProprietaryStructFormatter))] ProprietaryStruct value, CancellationToken cancellationToken);
     }
 
     protected override Type FormatterExceptionType => typeof(MessagePackSerializationException);
@@ -384,6 +386,23 @@ public class JsonRpcMessagePackLengthTests : JsonRpcTests
         Assert.True(await clientProxy.IsExtensionArgNonNull(new CustomExtensionType()));
     }
 
+    [Fact]
+    public async Task FormatterOnParameter_Interface()
+    {
+        IMessagePackServer clientProxy = this.clientRpc.Attach<IMessagePackServer>();
+        const string expected = "Beehive";
+        string? actual = await clientProxy.GetAPropertyFromStruct(new ProprietaryStruct { A = expected }, this.TimeoutToken);
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public async Task FormatterOnParameter_NoInterface()
+    {
+        const string expected = "Beehive";
+        string? actual = await this.clientRpc.InvokeWithCancellationAsync<string?>(nameof(MessagePackServer.GetAPropertyFromStructNoInterface), [expected], this.TimeoutToken);
+        Assert.Equal(expected, actual);
+    }
+
     protected override void InitializeFormattersAndHandlers(
         Stream serverStream,
         Stream clientStream,
@@ -407,6 +426,14 @@ public class JsonRpcMessagePackLengthTests : JsonRpcTests
         clientMessageHandler = controlledFlushingClient
             ? new DelayedFlushingHandler(clientStream, clientMessageFormatter)
             : new LengthHeaderMessageHandler(clientStream, clientStream, clientMessageFormatter);
+    }
+
+    /// <summary>
+    /// A struct that intentionally uses no MessagePack attributes so that a custom formatter will have to be provided.
+    /// </summary>
+    internal struct ProprietaryStruct
+    {
+        public string? A { get; set; }
     }
 
     [MessagePackObject]
@@ -512,6 +539,16 @@ public class JsonRpcMessagePackLengthTests : JsonRpcTests
         }
 
         public Task<bool> IsExtensionArgNonNull(CustomExtensionType extensionValue) => Task.FromResult(extensionValue is not null);
+
+        public Task<string?> GetAPropertyFromStruct(ProprietaryStruct value, CancellationToken cancellationToken)
+        {
+            return Task.FromResult(value.A);
+        }
+
+        public Task<string?> GetAPropertyFromStructNoInterface([MessagePackFormatter(typeof(ProprietaryStructFormatter))] ProprietaryStruct value, CancellationToken cancellationToken)
+        {
+            return Task.FromResult(value.A);
+        }
     }
 
     private class DelayedFlushingHandler : LengthHeaderMessageHandler, IControlledFlushHandler
@@ -530,6 +567,19 @@ public class JsonRpcMessagePackLengthTests : JsonRpcTests
             this.FlushEntered.Set();
             await this.AllowFlushAsyncExit.WaitAsync();
             await base.FlushAsync(cancellationToken);
+        }
+    }
+
+    private class ProprietaryStructFormatter : IMessagePackFormatter<ProprietaryStruct>
+    {
+        public ProprietaryStruct Deserialize(ref MessagePackReader reader, MessagePackSerializerOptions options)
+        {
+            return new ProprietaryStruct { A = reader.ReadString() };
+        }
+
+        public void Serialize(ref MessagePackWriter writer, ProprietaryStruct value, MessagePackSerializerOptions options)
+        {
+            writer.Write(value.A);
         }
     }
 }
