@@ -66,23 +66,23 @@ internal static class ProxyGeneration
     /// <returns>The generated type.</returns>
     internal static TypeInfo Get(ProxyInputs inputs)
     {
-        Type contractInterface = inputs.ContractInterface;
-        ReadOnlySpan<Type> additionalContractInterfaces = inputs.AdditionalContractInterfaces.Span;
-        ReadOnlySpan<(Type Type, int Code)> implementedOptionalInterfaces = inputs.ImplementedOptionalInterfaces.Span;
+        Type contractInterface = inputs.ContractInterface.TargetType;
+        ReadOnlySpan<Type> additionalContractInterfaces = [.. inputs.AdditionalContractInterfaces.Select(m => m.TargetType)];
+        ReadOnlySpan<(Type Type, int Code)> implementedOptionalInterfaces = [.. inputs.ImplementedOptionalInterfaces.Select(m => (m.Type.TargetType, m.Code))];
 
         // Dynamic proxy generation requires the ability to generate dynamic event handlers.
         // Not a problem, since by calling into this method the user has already committed to running on a runtime that supports dynamic code.
         RpcTargetMetadata.EnableDynamicEventHandlerCreation();
 
         VerifySupported(contractInterface.IsInterface, Resources.ClientProxyTypeArgumentMustBeAnInterface, contractInterface);
-        foreach (TypeInfo additionalContract in additionalContractInterfaces)
+        foreach (RpcTargetMetadata additionalContract in inputs.AdditionalContractInterfaces)
         {
-            VerifySupported(additionalContract.IsInterface, Resources.ClientProxyTypeArgumentMustBeAnInterface, additionalContract);
+            VerifySupported(additionalContract.TargetType.IsInterface, Resources.ClientProxyTypeArgumentMustBeAnInterface, additionalContract.TargetType);
         }
 
-        foreach ((Type type, _) in implementedOptionalInterfaces)
+        foreach ((RpcTargetMetadata metadata, _) in inputs.ImplementedOptionalInterfaces)
         {
-            VerifySupported(type.IsInterface, Resources.ClientProxyTypeArgumentMustBeAnInterface, type);
+            VerifySupported(metadata.TargetType.IsInterface, Resources.ClientProxyTypeArgumentMustBeAnInterface, metadata.TargetType);
         }
 
         TypeInfo? generatedType;
@@ -95,12 +95,12 @@ internal static class ProxyGeneration
             }
 
             Type[] contractInterfaces = [contractInterface, .. additionalContractInterfaces];
-            IList<(Type Type, int? Code)> rpcInterfaces = inputs.GetSortedInterfaceAndCodes();
+            IList<(RpcTargetMetadata TargetMetadata, int? Code)> rpcInterfaces = inputs.GetSortedInterfaceAndCodes();
 
             // For ALC selection reasons, it's vital that the *user's* selected interfaces come *before* our own supporting interfaces.
             // If the order is incorrect, type resolution may fail or the wrong AssemblyLoadContext (ALC) may be selected,
             // leading to runtime errors or unexpected behavior when loading types or invoking methods.
-            Type[] proxyInterfaces = [.. rpcInterfaces.Select(i => i.Type), typeof(IJsonRpcClientProxy), typeof(IJsonRpcClientProxyInternal)];
+            Type[] proxyInterfaces = [.. rpcInterfaces.Select(i => i.TargetMetadata.TargetType), typeof(IJsonRpcClientProxy), typeof(IJsonRpcClientProxyInternal)];
             ModuleBuilder proxyModuleBuilder = GetProxyModuleBuilder(proxyInterfaces);
 
             TypeBuilder proxyTypeBuilder = proxyModuleBuilder.DefineType(
@@ -283,9 +283,8 @@ internal static class ProxyGeneration
             MethodInfo notifyWithParameterObjectAsyncOfTaskMethodInfo = notifyWithParameterObjectAsyncMethodInfos.Single(m => !m.IsGenericMethod && m.GetParameters() is [_, { ParameterType.Name: nameof(Object) }]);
 
             HashSet<MethodInfo> implementedMethods = new() { DisposeMethod };
-            foreach ((Type rpcInterface, int? rpcInterfaceCode) in rpcInterfaces)
+            foreach ((RpcTargetMetadata methodNameMap, int? rpcInterfaceCode) in rpcInterfaces)
             {
-                RpcTargetMetadata methodNameMap = RpcTargetMetadata.FromInterface(rpcInterface.GetTypeInfo());
                 foreach ((string name, IReadOnlyList<RpcTargetMetadata.TargetMethodMetadata> overloads) in methodNameMap.Methods)
                 {
                     foreach (RpcTargetMetadata.TargetMethodMetadata methodMetadata in overloads)

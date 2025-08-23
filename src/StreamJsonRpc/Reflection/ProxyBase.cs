@@ -35,11 +35,11 @@ public abstract class ProxyBase : IJsonRpcClientProxyInternal
         [typeof(IObserver<>)] = typeof(ObserverProxyActivator<>),
     }.ToFrozenDictionary();
 
-    private static readonly ConcurrentDictionary<Type, IReadOnlyDictionary<Type, int>> OptionalInterfaceCodeCache = [];
+    private static readonly ConcurrentDictionary<RpcTargetMetadata, IReadOnlyDictionary<Type, int>> OptionalInterfaceCodeCache = [];
 
     private readonly JsonRpc client;
     private readonly ProxyInputs inputs;
-    private readonly ReadOnlyMemory<Type>? requestedInterfaces;
+    private readonly ImmutableArray<RpcTargetMetadata> requestedInterfaces;
     private readonly IReadOnlyDictionary<Type, int> optionalInterfaceCodes;
     private bool disposed;
 
@@ -58,32 +58,31 @@ public abstract class ProxyBase : IJsonRpcClientProxyInternal
         this.client = client;
         this.inputs = inputs;
 
-        Type[] requestedInterfaces = new Type[1 + inputs.AdditionalContractInterfaces.Length + inputs.ImplementedOptionalInterfaces.Length];
-        int i = 0;
-        requestedInterfaces[i++] = inputs.ContractInterface;
+        ImmutableArray<RpcTargetMetadata>.Builder requestedInterfaces = ImmutableArray.CreateBuilder<RpcTargetMetadata>(1 + inputs.AdditionalContractInterfaces.Length + inputs.ImplementedOptionalInterfaces.Length);
+        requestedInterfaces.Add(inputs.ContractInterface);
         for (int j = 0; j < inputs.AdditionalContractInterfaces.Length; j++)
         {
-            requestedInterfaces[i++] = inputs.AdditionalContractInterfaces.Span[j];
+            requestedInterfaces.Add(inputs.AdditionalContractInterfaces[j]);
         }
 
         for (int j = 0; j < inputs.ImplementedOptionalInterfaces.Length; j++)
         {
-            requestedInterfaces[i++] = inputs.ImplementedOptionalInterfaces.Span[j].Type;
+            requestedInterfaces.Add(inputs.ImplementedOptionalInterfaces[j].Type);
         }
 
-        this.requestedInterfaces = requestedInterfaces;
+        this.requestedInterfaces = requestedInterfaces.MoveToImmutable();
 
         this.optionalInterfaceCodes = OptionalInterfaceCodeCache.GetOrAdd(
             inputs.ContractInterface,
             static contract =>
             {
-                RpcMarshalableAttribute? mainAttribute = (RpcMarshalableAttribute?)contract.GetCustomAttribute(typeof(RpcMarshalableAttribute), inherit: false);
+                RpcMarshalableAttribute? mainAttribute = (RpcMarshalableAttribute?)contract.TargetType.GetCustomAttribute(typeof(RpcMarshalableAttribute), inherit: false);
                 if (mainAttribute is null)
                 {
                     return ImmutableDictionary<Type, int>.Empty;
                 }
 
-                RpcMarshalableOptionalInterfaceAttribute[] optionalInterfaceAttributes = MessageFormatterRpcMarshaledContextTracker.GetMarshalableOptionalInterfaces(contract, mainAttribute);
+                RpcMarshalableOptionalInterfaceAttribute[] optionalInterfaceAttributes = MessageFormatterRpcMarshaledContextTracker.GetMarshalableOptionalInterfaces(contract.TargetType, mainAttribute);
                 if (optionalInterfaceAttributes is [])
                 {
                     return ImmutableDictionary<Type, int>.Empty;
@@ -200,7 +199,7 @@ public abstract class ProxyBase : IJsonRpcClientProxyInternal
     /// </remarks>
     public static bool TryCreateProxy(JsonRpc jsonRpc, in ProxyInputs proxyInputs, [NotNullWhen(true)] out IJsonRpcClientProxy? proxy)
     {
-        if (proxyInputs.ImplementedOptionalInterfaces.Span is not [])
+        if (proxyInputs.ImplementedOptionalInterfaces is not [])
         {
             // We don't support this properly yet.
             proxy = null;
@@ -211,16 +210,16 @@ public abstract class ProxyBase : IJsonRpcClientProxyInternal
         // can create proxies for without any effort on the user's part.
         if (proxyInputs.AdditionalContractInterfaces.IsEmpty && proxyInputs.ImplementedOptionalInterfaces.IsEmpty)
         {
-            if (proxyInputs.ContractInterface == typeof(IDisposable))
+            if (proxyInputs.ContractInterface.TargetType == typeof(IDisposable))
             {
                 proxy = new ProxyForIDisposable(jsonRpc, proxyInputs);
                 return true;
             }
-            else if (proxyInputs.ContractInterface is { GenericTypeArguments.Length: 1 } && proxyInputs.ContractInterfaceShape is not null)
+            else if (proxyInputs.ContractInterface is { TargetType.GenericTypeArguments.Length: 1 } && proxyInputs.ContractInterfaceShape is not null)
             {
                 // To avoid having to dynamically close a generic type, we utilize PolyType associated type shapes to get our activation class,
                 // which is generic and therefore the NativeAOT compiler will have precompiled it and the proxy it depends on.
-                if (BclTypesTreatedAsMarshalable.TryGetValue(proxyInputs.ContractInterface.GetGenericTypeDefinition(), out Type? associatedActivatorType))
+                if (BclTypesTreatedAsMarshalable.TryGetValue(proxyInputs.ContractInterface.TargetType.GetGenericTypeDefinition(), out Type? associatedActivatorType))
                 {
                     IObjectTypeShape? proxyGenerationShape = (IObjectTypeShape?)proxyInputs.ContractInterfaceShape.GetAssociatedTypeShape(associatedActivatorType);
                     if (proxyGenerationShape?.GetDefaultConstructor() is { } ctor)
@@ -235,15 +234,15 @@ public abstract class ProxyBase : IJsonRpcClientProxyInternal
 
         // Look for a source generated proxy type first.
         // We want a proxy that implements exactly the right set of contract interfaces.
-        foreach (JsonRpcProxyMappingAttribute attribute in proxyInputs.ContractInterface.GetCustomAttributes<JsonRpcProxyMappingAttribute>())
+        foreach (JsonRpcProxyMappingAttribute attribute in proxyInputs.ContractInterface.TargetType.GetCustomAttributes<JsonRpcProxyMappingAttribute>())
         {
             // Of the various proxies that implement the interfaces the user requires,
             // look for a match.
             if (ProxyImplementsCompatibleSetOfInterfaces(
                 attribute.ProxyClass,
                 proxyInputs.ContractInterface,
-                proxyInputs.AdditionalContractInterfaces.Span,
-                proxyInputs.ImplementedOptionalInterfaces.Span,
+                proxyInputs.AdditionalContractInterfaces.AsSpan(),
+                proxyInputs.ImplementedOptionalInterfaces.AsSpan(),
                 proxyInputs.Options))
             {
                 // If the source generated proxy type exists, use it.
@@ -267,15 +266,15 @@ public abstract class ProxyBase : IJsonRpcClientProxyInternal
             return false;
         }
 
-        if (!this.requestedInterfaces.HasValue || !this.Options.AcceptProxyWithExtraInterfaces)
+        if (this.requestedInterfaces is [] || !this.Options.AcceptProxyWithExtraInterfaces)
         {
             // There's no chance this proxy implements too many interfaces.
             return false;
         }
 
-        foreach (Type iface in this.requestedInterfaces.Value.Span)
+        foreach (RpcTargetMetadata iface in this.requestedInterfaces)
         {
-            if (iface == type)
+            if (iface.TargetType == type)
             {
                 return true;
             }
@@ -350,28 +349,28 @@ public abstract class ProxyBase : IJsonRpcClientProxyInternal
     /// </remarks>
     private static bool ProxyImplementsCompatibleSetOfInterfaces(
         [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.Interfaces)] Type proxyClass,
-        Type contractInterface,
-        ReadOnlySpan<Type> additionalContractInterfaces,
-        ReadOnlySpan<(Type Type, int Code)> implementedOptionalInterfaces,
+        RpcTargetMetadata contractInterface,
+        ReadOnlySpan<RpcTargetMetadata> additionalContractInterfaces,
+        ReadOnlySpan<(RpcTargetMetadata Type, int Code)> implementedOptionalInterfaces,
         JsonRpcProxyOptions? options)
     {
         HashSet<Type> proxyInterfaces = [.. proxyClass.GetInterfaces()];
-        if (!proxyInterfaces.Remove(contractInterface))
+        if (!proxyInterfaces.Remove(contractInterface.TargetType))
         {
             return false;
         }
 
-        foreach (Type addl in additionalContractInterfaces)
+        foreach (RpcTargetMetadata addl in additionalContractInterfaces)
         {
-            if (!proxyInterfaces.Remove(addl))
+            if (!proxyInterfaces.Remove(addl.TargetType))
             {
                 return false;
             }
         }
 
-        foreach ((Type addl, _) in implementedOptionalInterfaces)
+        foreach ((RpcTargetMetadata addl, _) in implementedOptionalInterfaces)
         {
-            if (!proxyInterfaces.Remove(addl))
+            if (!proxyInterfaces.Remove(addl.TargetType))
             {
                 return false;
             }
@@ -391,22 +390,22 @@ public abstract class ProxyBase : IJsonRpcClientProxyInternal
         // Are there any remaining interfaces? If so, they're alright only if they are base types of the interfaces we were looking for.
         foreach (Type remaining in proxyInterfaces)
         {
-            if (remaining.IsAssignableFrom(contractInterface))
+            if (remaining.IsAssignableFrom(contractInterface.TargetType))
             {
                 continue;
             }
 
-            foreach (Type addl in additionalContractInterfaces)
+            foreach (RpcTargetMetadata addl in additionalContractInterfaces)
             {
-                if (remaining.IsAssignableFrom(addl))
+                if (remaining.IsAssignableFrom(addl.TargetType))
                 {
                     continue;
                 }
             }
 
-            foreach ((Type addl, _) in implementedOptionalInterfaces)
+            foreach ((RpcTargetMetadata addl, _) in implementedOptionalInterfaces)
             {
-                if (remaining.IsAssignableFrom(addl))
+                if (remaining.IsAssignableFrom(addl.TargetType))
                 {
                     continue;
                 }

@@ -795,7 +795,7 @@ public class JsonRpc : IDisposableObservable, IJsonRpcFormatterCallbacks, IJsonR
         where T : class
     {
         var rpc = new JsonRpc(sendingStream, receivingStream);
-        T proxy = (T)rpc.CreateProxy(new ProxyInputs { ContractInterface = typeof(T) });
+        T proxy = (T)rpc.CreateProxy(new ProxyInputs { ContractInterface = RpcTargetMetadata.FromInterface(typeof(T)) });
         rpc.StartListening();
         return proxy;
     }
@@ -835,7 +835,7 @@ public class JsonRpc : IDisposableObservable, IJsonRpcFormatterCallbacks, IJsonR
         where T : class
     {
         var rpc = new JsonRpc(handler);
-        T proxy = (T)rpc.CreateProxy(new ProxyInputs { ContractInterface = typeof(T), Options = options });
+        T proxy = (T)rpc.CreateProxy(new ProxyInputs { ContractInterface = RpcTargetMetadata.FromInterface(typeof(T)), Options = options });
         rpc.StartListening();
         return proxy;
     }
@@ -864,7 +864,7 @@ public class JsonRpc : IDisposableObservable, IJsonRpcFormatterCallbacks, IJsonR
     public T Attach<T>(JsonRpcProxyOptions? options)
         where T : class
     {
-        return (T)this.CreateProxy(new ProxyInputs { ContractInterface = typeof(T), Options = options });
+        return (T)this.CreateProxy(new ProxyInputs { ContractInterface = RpcTargetMetadata.FromInterface(typeof(T)), Options = options });
     }
 
     /// <summary>
@@ -887,7 +887,7 @@ public class JsonRpc : IDisposableObservable, IJsonRpcFormatterCallbacks, IJsonR
     public object Attach(Type interfaceType, JsonRpcProxyOptions? options)
     {
         Requires.NotNull(interfaceType, nameof(interfaceType));
-        return this.CreateProxy(new ProxyInputs { ContractInterface = interfaceType.GetTypeInfo(), Options = options });
+        return this.CreateProxy(new ProxyInputs { ContractInterface = RpcTargetMetadata.FromInterface(interfaceType.GetTypeInfo()), Options = options });
     }
 
     /// <summary>
@@ -901,7 +901,15 @@ public class JsonRpc : IDisposableObservable, IJsonRpcFormatterCallbacks, IJsonR
     public object Attach(ReadOnlySpan<Type> interfaceTypes, JsonRpcProxyOptions? options)
     {
         Requires.Argument(interfaceTypes.Length > 0, nameof(interfaceTypes), Resources.RequiredArgumentMissing);
-        return this.CreateProxy(new ProxyInputs { ContractInterface = interfaceTypes[0], AdditionalContractInterfaces = interfaceTypes[1..].ToArray(), Options = options });
+
+        RpcTargetMetadata contractMetadata = RpcTargetMetadata.FromInterface(interfaceTypes[0]);
+        ImmutableArray<RpcTargetMetadata>.Builder addlContractIfaces = ImmutableArray.CreateBuilder<RpcTargetMetadata>(interfaceTypes.Length - 1);
+        for (int i = 1; i < interfaceTypes.Length; i++)
+        {
+            addlContractIfaces.Add(RpcTargetMetadata.FromInterface(interfaceTypes[i]));
+        }
+
+        return this.CreateProxy(new ProxyInputs { ContractInterface = contractMetadata, AdditionalContractInterfaces = addlContractIfaces.MoveToImmutable(), Options = options });
     }
 
     /// <inheritdoc cref="AddLocalRpcTarget(object, JsonRpcTargetOptions?)"/>
