@@ -18,7 +18,7 @@ namespace StreamJsonRpc;
 /// If derived class and base class have conflicting <see cref="JsonRpcMethodAttribute"/> values for a method, an error will be thrown during <see cref="JsonRpc"/> construction.
 /// </remarks>
 [AttributeUsage(AttributeTargets.Method, AllowMultiple = false, Inherited = true)]
-public class JsonRpcMethodAttribute : Attribute
+public class JsonRpcMethodAttribute : Attribute, IEquatable<JsonRpcMethodAttribute>
 {
     /// <summary>
     /// Initializes a new instance of the <see cref="JsonRpcMethodAttribute" /> class.
@@ -64,4 +64,19 @@ public class JsonRpcMethodAttribute : Attribute
     /// Named arguments are used if and only if this property is set to <see langword="true" />.
     /// </remarks>
     public bool ClientRequiresNamedArguments { get; set; }
+
+    /// <inheritdoc/>
+    public bool Equals(JsonRpcMethodAttribute? other)
+    {
+        return other is not null
+            && this.Name == other.Name
+            && this.UseSingleObjectParameterDeserialization == other.UseSingleObjectParameterDeserialization
+            && this.ClientRequiresNamedArguments == other.ClientRequiresNamedArguments;
+    }
+
+    /// <inheritdoc/>
+    public override bool Equals(object? obj) => this.Equals(obj as JsonRpcMethodAttribute);
+
+    /// <inheritdoc/>
+    public override int GetHashCode() => HashCode.Combine(this.Name, this.UseSingleObjectParameterDeserialization, this.ClientRequiresNamedArguments);
 }

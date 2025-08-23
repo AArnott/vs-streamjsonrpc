@@ -1,3 +1,5 @@
+override StreamJsonRpc.JsonRpcMethodAttribute.Equals(object? obj) -> bool
+override StreamJsonRpc.JsonRpcMethodAttribute.GetHashCode() -> int
 override StreamJsonRpc.RpcTargetMetadata.TargetMethodMetadata.ToString() -> string!
 static StreamJsonRpc.JsonRpcExtensions.As<T>(this StreamJsonRpc.IClientProxy! proxy) -> T?
 static StreamJsonRpc.JsonRpcProxyOptions.Default.get -> StreamJsonRpc.JsonRpcProxyOptions!
@@ -37,6 +39,7 @@ StreamJsonRpc.JsonRpc.NotifyWithParameterObjectAsync(string! targetName, StreamJ
 StreamJsonRpc.JsonRpc.NotifyWithParameterObjectAsync(string! targetName, System.Collections.Generic.IReadOnlyDictionary<string!, object?>? namedArguments, System.Collections.Generic.IReadOnlyDictionary<string!, System.Type!>? argumentDeclaredTypes) -> System.Threading.Tasks.Task!
 StreamJsonRpc.JsonRpcContractAttribute
 StreamJsonRpc.JsonRpcContractAttribute.JsonRpcContractAttribute() -> void
+StreamJsonRpc.JsonRpcMethodAttribute.Equals(StreamJsonRpc.JsonRpcMethodAttribute? other) -> bool
 StreamJsonRpc.JsonRpcProxyAttribute<T>
 StreamJsonRpc.JsonRpcProxyAttribute<T>.JsonRpcProxyAttribute() -> void
 StreamJsonRpc.JsonRpcProxyInterfaceGroupAttribute
