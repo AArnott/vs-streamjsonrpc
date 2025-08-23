@@ -9,17 +9,17 @@ using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Reflection;
 using Microsoft.VisualStudio.Threading;
+using Nerdbank.MessagePack;
 using PolyType;
 using PolyType.Abstractions;
 using PolyType.Utilities;
-using StreamJsonRpc.Protocol;
 
 namespace StreamJsonRpc;
 
 /// <summary>
 /// Describes an RPC target type, which can be an interface or a class.
 /// </summary>
-public class RpcTargetMetadata
+public partial class RpcTargetMetadata : IEquatable<RpcTargetMetadata>
 {
     private const string ImpliedMethodNameAsyncSuffix = "Async";
     private static readonly ConcurrentDictionary<Type, IEventHandlerFactory> EventHandlerFactories = [];
@@ -28,6 +28,8 @@ public class RpcTargetMetadata
     private static readonly ConcurrentDictionary<Type, RpcTargetMetadata> NonPublicClass = [];
     private static readonly MethodInfo RegisterEventArgsMethodInfo = typeof(RpcTargetMetadata).GetMethod(nameof(RegisterEventArgs), BindingFlags.Public | BindingFlags.Static) ?? throw Assumes.NotReachable();
     private static Action<Type>? dynamicEventHandlerFactoryRegistration;
+    private static IEqualityComparer<RpcTargetMetadata?>? selfEqualityComparer;
+    private static IEqualityComparer<RpcTargetMetadata?> SelfEqualityComparer => selfEqualityComparer ??= StructuralEqualityComparer.GetDefault<RpcTargetMetadata?>(Witness.ShapeProvider);
 
     /// <summary>
     /// Represents a method that creates a delegate to handle a specified JSON-RPC event.
@@ -330,6 +332,15 @@ public class RpcTargetMetadata
     /// </typeparam>
     public static void RegisterEventArgs<TEventArgs>()
         where TEventArgs : struct => EventHandlerFactories.TryAdd(typeof(TEventArgs), new EventHandlerFactory<TEventArgs>());
+
+    /// <inheritdoc/>
+    public bool Equals(RpcTargetMetadata? other) => SelfEqualityComparer.Equals(this, other);
+
+    /// <inheritdoc/>
+    public override bool Equals(object obj) => this.Equals(obj as RpcTargetMetadata);
+
+    /// <inheritdoc/>
+    public override int GetHashCode() => SelfEqualityComparer.GetHashCode(this);
 
     private static void AddMethods(Builder builder, IReadOnlyList<IMethodShape> methods)
     {
@@ -690,7 +701,7 @@ public class RpcTargetMetadata
     /// directly by consumers.
     /// </para>
     /// </remarks>
-    public class EventMetadata
+    public class EventMetadata : IEquatable<EventMetadata>, IStructuralSecureEqualityComparer<EventMetadata>
     {
         /// <summary>
         /// Gets the event for which this metadata is describing the handler.
@@ -711,6 +722,28 @@ public class RpcTargetMetadata
         /// Gets a factory method that creates a delegate to handle the event.
         /// </summary>
         public required CreateEventHandlerDelegate CreateEventHandler { get; init; }
+
+        /// <inheritdoc/>
+        public bool Equals(EventMetadata? other)
+        {
+            return other is not null
+                && this.Event == other.Event
+                && this.Name == other.Name
+                && this.EventHandlerType == other.EventHandlerType
+                && this.CreateEventHandler is null == other.CreateEventHandler is null; // We assume factories are equivalent.
+        }
+
+        /// <inheritdoc/>
+        public override bool Equals(object obj) => this.Equals(obj as EventMetadata);
+
+        /// <inheritdoc/>
+        public override int GetHashCode() => HashCode.Combine(this.Event, this.Name, this.EventHandlerType, this.CreateEventHandler is null);
+
+        /// <inheritdoc/>
+        long IStructuralSecureEqualityComparer<EventMetadata>.GetSecureHashCode() => throw new NotImplementedException();
+
+        /// <inheritdoc/>
+        bool IStructuralSecureEqualityComparer<EventMetadata>.StructuralEquals(EventMetadata? other) => this.Equals(other);
     }
 
     /// <summary>
@@ -728,7 +761,7 @@ public class RpcTargetMetadata
     /// </para>
     /// </remarks>
     [DebuggerDisplay($"{{{nameof(DebuggerDisplay)},nq}}")]
-    public class TargetMethodMetadata
+    public class TargetMethodMetadata : IEquatable<TargetMethodMetadata>, IStructuralSecureEqualityComparer<TargetMethodMetadata>
     {
         private ParameterInfo[]? parameters;
 
@@ -794,6 +827,25 @@ public class RpcTargetMetadata
 
         /// <inheritdoc/>
         public override string ToString() => this.DebuggerDisplay;
+
+        /// <inheritdoc/>
+        public bool Equals(TargetMethodMetadata? other)
+        {
+            return other is not null
+                && this.MethodInfo == other.MethodInfo
+                && EqualityComparer<JsonRpcMethodAttribute?>.Default.Equals(this.Attribute, other.Attribute)
+                && this.Name == other.Name; // Name is the only value that derives from the ctor's Shape parameter.
+        }
+
+        /// <inheritdoc/>
+        public override bool Equals(object obj) => this.Equals(obj as TargetMethodMetadata);
+
+        /// <inheritdoc/>
+        public override int GetHashCode() => HashCode.Combine(this.MethodInfo, this.Attribute, this.Name);
+
+        bool IStructuralSecureEqualityComparer<TargetMethodMetadata>.StructuralEquals(TargetMethodMetadata? other) => this.Equals(other);
+
+        long IStructuralSecureEqualityComparer<TargetMethodMetadata>.GetSecureHashCode() => throw new NotImplementedException();
 
         internal static TargetMethodMetadata From(MethodInfo method, JsonRpcMethodAttribute? attribute, IMethodShape? shape) => new(method, attribute, shape);
 
@@ -931,4 +983,7 @@ public class RpcTargetMetadata
             }
         }
     }
+
+    [GenerateShapeFor<RpcTargetMetadata>]
+    private partial class Witness;
 }
